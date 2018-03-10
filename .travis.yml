@@ -1,4 +1,13 @@
 sudo: required
 
+language: go
+
+go:
+  - "1.10"
+
 services:
   - docker
+
+script:
+  - docker build -t pachyderm_exporter .
+  - go test ./...
