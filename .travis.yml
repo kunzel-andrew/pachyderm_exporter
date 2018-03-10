@@ -7,7 +7,3 @@ go:
 
 services:
   - docker
-
-script:
-  - docker build -t pachyderm_exporter .
-  - go test ./...
