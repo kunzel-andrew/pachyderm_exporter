@@ -27,6 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer c.Close()
 	exp := exporter.New(&exporter.PachydermClientWrapper{APIClient: c}, *pachydermTimeout)
 	prometheus.MustRegister(exp)
 
