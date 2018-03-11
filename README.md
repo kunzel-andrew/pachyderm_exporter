@@ -1,5 +1,8 @@
 # Pachyderm exporter for Prometheus
 
+[![Build Status](https://travis-ci.org/button/pachyderm_exporter.svg?branch=master)](https://travis-ci.org/button/pachyderm_exporter)
+[![Go Report Card](https://goreportcard.com/badge/github.com/button/pachyderm_exporter)](https://goreportcard.com/report/github.com/button/pachyderm_exporter)
+
 This is a simple server that tails Pachyderm's job list and exports stats via HTTP for Prometheus consumption.
 
 ## Getting started
