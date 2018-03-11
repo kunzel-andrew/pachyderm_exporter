@@ -10,8 +10,8 @@ test:
 	go test -v ./...
 
 build-docker:
-	docker build -t pachyderm_exporter .
+	docker build -t pachyderm-exporter .
 
 release-docker: build-docker
-	docker tag pachyderm_exporter:latest button/pachyderm_exporter:$$(<VERSION)
-	docker push button/pachyderm_exporter:$$(<VERSION)
+	docker tag pachyderm_exporter:latest button/pachyderm-exporter:$$(<VERSION)
+	docker push button/pachyderm-exporter:$$(<VERSION)
