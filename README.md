@@ -31,12 +31,27 @@ See [here](./exporter/exporter.go#L61) for the list of exported metrics.
 
 Pachyderm runs on Kubernetes, so `pachyderm_exporter` should as well.
 
-To get the Pachyderm `pachd` server address:
+To deploy the exporter, execute the following command:
 
 ```
-kubectl get service pachd -o go-template='{{.spec.clusterIP}}:{{(index .spec.ports 0).nodePort}}'
+kubectl apply -f https://raw.githubusercontent.com/button/pachyderm_exporter/master/deploy/pachyderm-exporter.yaml
 ```
 
-Then to run:
+The exporter should be able to discover pachyderm and start successfully. Find its pod and service by running:
 
-**TODO**
+```
+> kubectl get po,svc -l app=pachyderm-exporter
+NAME                                     READY     STATUS    RESTARTS   AGE
+po/pachyderm-exporter-56d7bf784f-w4kpc   1/1       Running   0          4m
+
+NAME                     TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+svc/pachyderm-exporter   ClusterIP   100.66.52.64   <none>        9425/TCP   11m
+```
+
+Here, the exporter can be reached within the Kubernetes cluster at `100.66.52.64` on port `9425`.
+
+You should be able to scrape metrics manually by executing:
+
+```
+kubectl run curl --image=radial/busyboxplus:curl -i --tty --rm --restart=Never -- curl pachyderm-exporter.default.svc.cluster.local:9425/metrics
+```
