@@ -34,6 +34,11 @@ func TestScrape(t *testing.T) {
 			job("map", "2", pps.JobState_JOB_SUCCESS, 10, t2),
 			job("map", "1", pps.JobState_JOB_SUCCESS, 10, t1),
 		},
+		pipelines: []*pps.PipelineInfo{
+			pipeline("map", "1", pps.PipelineState_PIPELINE_RUNNING),
+			pipeline("reduce", "2", pps.PipelineState_PIPELINE_STARTING),
+			pipeline("goofy", "3", pps.PipelineState_PIPELINE_FAILURE),
+		},
 	}
 	exporter := New(client, time.Minute)
 	reg := promtest.NewTestRegistry(t)
@@ -55,6 +60,10 @@ func TestScrape(t *testing.T) {
 	snapshot.AssertGauge("pachyderm_last_successful_job", map[string]string{"pipeline": "reduce"}, t3)
 	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 20)
 	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "reduce"}, 10)
+
+	snapshot.AssertGauge("pachyderm_pipeline_states", map[string]string{"state": "running", "pipeline": "map"}, 1)
+	snapshot.AssertGauge("pachyderm_pipeline_states", map[string]string{"state": "starting", "pipeline": "reduce"}, 1)
+	snapshot.AssertGauge("pachyderm_pipeline_states", map[string]string{"state": "failure", "pipeline": "goofy"}, 1)
 
 	// Reduce job 4 finishes successfully and processes more datums
 	// Reduce job 5 fails
@@ -237,8 +246,19 @@ func job(pipeline, id string, state pps.JobState, datumsProcessed int64, timeCom
 	}
 }
 
+func pipeline(name, id string, state pps.PipelineState) *pps.PipelineInfo {
+	return &pps.PipelineInfo{
+		ID: id,
+		Pipeline: &pps.Pipeline{
+			Name: name,
+		},
+		State: state,
+	}
+}
+
 type fakePachyderm struct {
 	jobs       []*pps.JobInfo
+	pipelines  []*pps.PipelineInfo
 	idx        int
 	lastStream *stream
 	// Return error on creating stream
@@ -257,6 +277,14 @@ func (f *fakePachyderm) ListJobStream(ctx context.Context, in *pps.ListJobReques
 		errReadStream: f.errReadStream,
 	}
 	return f.lastStream, nil
+}
+
+func (f *fakePachyderm) ListPipeline() ([]*pps.PipelineInfo, error) {
+	return f.pipelines, nil
+}
+
+func (f *fakePachyderm) WithCtx(ctx context.Context) PachydermClient {
+	return f
 }
 
 type stream struct {

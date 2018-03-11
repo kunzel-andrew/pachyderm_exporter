@@ -1,11 +1,14 @@
 package exporter
 
 import (
+	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/pachyderm/pachyderm/src/client"
 	"github.com/pachyderm/pachyderm/src/client/pps"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/net/context"
@@ -35,17 +38,20 @@ type Exporter struct {
 
 type PachydermClient interface {
 	ListJobStream(ctx context.Context, in *pps.ListJobRequest, opts ...grpc.CallOption) (pps.API_ListJobStreamClient, error)
+	ListPipeline() ([]*pps.PipelineInfo, error)
+	WithCtx(ctx context.Context) PachydermClient
 }
 
 type metrics struct {
+	scrapes           prometheus.Counter
+	up                prometheus.Gauge
+	pipelines         *prometheus.GaugeVec
 	jobsCompleted     *prometheus.CounterVec
 	jobsFailed        *prometheus.CounterVec
 	jobsRunning       *prometheus.GaugeVec
 	jobsStarting      *prometheus.GaugeVec
 	datums            *prometheus.CounterVec
 	lastSuccessfulJob *prometheus.GaugeVec
-	scrapes           prometheus.Counter
-	up                prometheus.Gauge
 	uploaded          *prometheus.CounterVec
 	downloaded        *prometheus.CounterVec
 	uploadTime        *prometheus.CounterVec
@@ -66,6 +72,10 @@ func New(c PachydermClient, queryTimeout time.Duration) *Exporter {
 				Name: "pachyderm_exporter_scrapes_total",
 				Help: "Total pachyderm scrapes",
 			}),
+			pipelines: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "pachyderm_pipeline_states",
+				Help: "State of each pipeline. Set to 1 if pipeline is in the given state.",
+			}, []string{"state", "pipeline"}),
 			jobsCompleted: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "pachyderm_jobs_completed_total",
 				Help: "Total number of jobs that pachyderm has completed, by state and pipeline",
@@ -116,6 +126,7 @@ func New(c PachydermClient, queryTimeout time.Duration) *Exporter {
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.m.up.Describe(ch)
 	e.m.scrapes.Describe(ch)
+	e.m.pipelines.Describe(ch)
 	e.m.jobsCompleted.Describe(ch)
 	e.m.jobsRunning.Describe(ch)
 	e.m.jobsStarting.Describe(ch)
@@ -132,10 +143,16 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	e.scrape()
+	if err := e.scrape(); err != nil {
+		e.m.up.Set(0)
+		log.Println("scrape failed: ", err)
+	} else {
+		e.m.up.Set(1)
+	}
 
 	e.m.up.Collect(ch)
 	e.m.scrapes.Collect(ch)
+	e.m.pipelines.Collect(ch)
 	e.m.jobsCompleted.Collect(ch)
 	e.m.datums.Collect(ch)
 	e.m.downloaded.Collect(ch)
@@ -148,21 +165,50 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.collectLastSuccess(ch)
 }
 
-func (e *Exporter) scrape() {
+func (e *Exporter) scrape() error {
 	e.m.scrapes.Inc()
+	if err := e.scrapePipelines(); err != nil {
+		return err
+	}
+	if err := e.scrapeJobs(); err != nil {
+		return err
+	}
+	return nil
+}
 
+func (e *Exporter) scrapePipelines() error {
+	ctx, cancel := context.WithTimeout(context.Background(), e.queryTimeout)
+	defer cancel()
+	pipelines, err := e.pachClient.WithCtx(ctx).ListPipeline()
+	if err != nil {
+		return fmt.Errorf("couldn't list pipelines: %s", err.Error())
+	}
+	gauge := e.m.pipelines
+	gauge.Reset()
+	for _, pipeline := range pipelines {
+		name := pipeline.Pipeline.Name
+		state := strings.ToLower(strings.TrimPrefix(pipeline.State.String(), "PIPELINE_"))
+		gauge.WithLabelValues(state, name).Set(1)
+	}
+	return nil
+}
+
+func (e *Exporter) scrapeJobs() error {
 	ctx, cancel := context.WithTimeout(context.Background(), e.queryTimeout)
 	defer cancel()
 	stream, err := e.pachClient.ListJobStream(ctx, &pps.ListJobRequest{})
 	if err != nil {
-		e.m.up.Set(0)
-		log.Printf("error couldn't list jobs: %s", err.Error())
-		return
+		return fmt.Errorf("couldn't list jobs: %s", err.Error())
 	}
+	defer stream.CloseSend()
 
 	reachedLastTail := false
 	tailJobID := ""
-	failScrape := false
+	defer func() {
+		if tailJobID != "" {
+			e.lastTailJobID = tailJobID
+		}
+	}()
 
 	notSeen := mergeJobMap(e.startingJobs, e.runningJobs)
 
@@ -174,8 +220,7 @@ func (e *Exporter) scrape() {
 		job, err := stream.Recv()
 		if err != nil {
 			if err != io.EOF {
-				failScrape = true
-				log.Printf("error reading stream: %s", err.Error())
+				return fmt.Errorf("error reading stream: %s", err.Error())
 			}
 			break
 		}
@@ -232,15 +277,7 @@ func (e *Exporter) scrape() {
 			}
 		}
 	}
-	if err := stream.CloseSend(); err != nil {
-		log.Printf("error closing stream: %s", err.Error())
-	}
-	if failScrape {
-		e.m.up.Set(0)
-	} else {
-		e.m.up.Set(1)
-	}
-	e.lastTailJobID = tailJobID
+	return nil
 }
 
 func isCompletedState(state pps.JobState) bool {
@@ -349,4 +386,14 @@ func mergeJobMap(a, b map[string]*pps.JobInfo) map[string]*pps.JobInfo {
 		dst[k] = v
 	}
 	return dst
+}
+
+// PachydermClientWrapper modifies the signature of APIClient.WithCtx so that it can be used in the PachydermClient
+// interface.
+type PachydermClientWrapper struct {
+	*client.APIClient
+}
+
+func (w *PachydermClientWrapper) WithCtx(ctx context.Context) PachydermClient {
+	return &PachydermClientWrapper{w.APIClient.WithCtx(ctx)}
 }

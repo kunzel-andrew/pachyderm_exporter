@@ -27,7 +27,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	exp := exporter.New(c, *pachydermTimeout)
+	exp := exporter.New(&exporter.PachydermClientWrapper{APIClient: c}, *pachydermTimeout)
 	prometheus.MustRegister(exp)
 
 	log.Printf("Starting pachyderm_exporter on port %s", *listenAddress)
