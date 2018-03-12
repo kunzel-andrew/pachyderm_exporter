@@ -14,4 +14,6 @@ build-docker:
 
 release-docker: build-docker
 	docker tag pachyderm_exporter:latest button/pachyderm-exporter:$$(<VERSION)
+	docker tag pachyderm_exporter:latest button/pachyderm-exporter:latest
 	docker push button/pachyderm-exporter:$$(<VERSION)
+	docker push button/pachyderm-exporter:latest

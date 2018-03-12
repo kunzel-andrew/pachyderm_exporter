@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: pachyderm-exporter
-        image: button/pachyderm_exporter:latest
+        image: button/pachyderm-exporter:latest
         command: ['pachyderm_exporter', '--pachyderm.address', 'pachd.default.svc.cluster.local:650']
         ports:
         - containerPort: 9425
