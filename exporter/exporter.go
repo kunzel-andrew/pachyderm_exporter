@@ -26,9 +26,12 @@ const (
 )
 
 type Exporter struct {
-	pachClient        PachydermClient
-	queryTimeout      time.Duration
-	mutex             sync.Mutex
+	pachClient   PachydermClient
+	queryTimeout time.Duration
+	mutex        sync.Mutex
+	// List of pipelines on pachyderm
+	pipelines map[string]bool
+	// Map of jobID to job metadata
 	runningJobs       map[string]*pps.JobInfo
 	startingJobs      map[string]*pps.JobInfo
 	lastTailJobID     string
@@ -48,10 +51,10 @@ type metrics struct {
 	pipelines         *prometheus.GaugeVec
 	jobsCompleted     *prometheus.CounterVec
 	jobsFailed        *prometheus.CounterVec
-	jobsRunning       *prometheus.GaugeVec
-	jobsStarting      *prometheus.GaugeVec
+	jobsRunning       *prometheus.Desc
+	jobsStarting      *prometheus.Desc
 	datums            *prometheus.CounterVec
-	lastSuccessfulJob *prometheus.GaugeVec
+	lastSuccessfulJob *prometheus.Desc
 	uploaded          *prometheus.CounterVec
 	downloaded        *prometheus.CounterVec
 	uploadTime        *prometheus.CounterVec
@@ -80,18 +83,21 @@ func New(c PachydermClient, queryTimeout time.Duration) *Exporter {
 				Name: "pachyderm_jobs_completed_total",
 				Help: "Total number of jobs that pachyderm has completed, by state and pipeline",
 			}, []string{"state", "pipeline"}),
-			jobsRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_jobs_running",
-				Help: "Number of pachyderm jobs in the RUNNING state",
-			}, []string{"pipeline"}),
-			jobsStarting: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_jobs_starting",
-				Help: "Number of pachyderm jobs in the STARTING state",
-			}, []string{"pipeline"}),
-			lastSuccessfulJob: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_last_successful_job",
-				Help: "When the last successful job ran, as a Unix timestamp in seconds",
-			}, []string{"pipeline"}),
+			jobsRunning: prometheus.NewDesc(
+				"pachyderm_jobs_running",
+				"Number of pachyderm jobs in the RUNNING state",
+				[]string{"pipeline"}, nil,
+			),
+			jobsStarting: prometheus.NewDesc(
+				"pachyderm_jobs_starting",
+				"Number of pachyderm jobs in the STARTING state",
+				[]string{"pipeline"}, nil,
+			),
+			lastSuccessfulJob: prometheus.NewDesc(
+				"pachyderm_last_successful_job",
+				"When the last successful job ran, as a Unix timestamp in seconds",
+				[]string{"pipeline"}, nil,
+			),
 			datums: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "pachyderm_datums_total",
 				Help: "Total number of datums that pachyderm has processed",
@@ -128,10 +134,10 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.m.scrapes.Describe(ch)
 	e.m.pipelines.Describe(ch)
 	e.m.jobsCompleted.Describe(ch)
-	e.m.jobsRunning.Describe(ch)
-	e.m.jobsStarting.Describe(ch)
+	ch <- e.m.jobsRunning
+	ch <- e.m.jobsStarting
+	ch <- e.m.lastSuccessfulJob
 	e.m.datums.Describe(ch)
-	e.m.lastSuccessfulJob.Describe(ch)
 	e.m.downloaded.Describe(ch)
 	e.m.uploaded.Describe(ch)
 	e.m.downloadTime.Describe(ch)
@@ -183,10 +189,13 @@ func (e *Exporter) scrapePipelines() error {
 	if err != nil {
 		return fmt.Errorf("couldn't list pipelines: %s", err.Error())
 	}
+	// reset and populate e.pipelines
+	e.pipelines = make(map[string]bool, len(pipelines))
 	gauge := e.m.pipelines
 	gauge.Reset()
 	for _, pipeline := range pipelines {
 		name := pipeline.Pipeline.Name
+		e.pipelines[name] = true
 		state := strings.ToLower(strings.TrimPrefix(pipeline.State.String(), "PIPELINE_"))
 		gauge.WithLabelValues(state, name).Set(1)
 	}
@@ -336,32 +345,25 @@ func incCounter(c prometheus.Counter, v int64) {
 }
 
 func (e *Exporter) collectRunningJobs(ch chan<- prometheus.Metric) {
-	e.m.jobsRunning.Reset()
-
 	jobs := byPipeline(e.runningJobs)
-	for pipeline, count := range jobs {
-		e.m.jobsRunning.WithLabelValues(pipeline).Set(float64(count))
+
+	for pipeline := range e.pipelines {
+		ch <- prometheus.MustNewConstMetric(e.m.jobsRunning, prometheus.GaugeValue, float64(jobs[pipeline]), pipeline)
 	}
-	e.m.jobsRunning.Collect(ch)
 }
 
 func (e *Exporter) collectStartingJobs(ch chan<- prometheus.Metric) {
-	e.m.jobsStarting.Reset()
-
 	jobs := byPipeline(e.startingJobs)
-	for pipeline, count := range jobs {
-		e.m.jobsStarting.WithLabelValues(pipeline).Set(float64(count))
+
+	for pipeline := range e.pipelines {
+		ch <- prometheus.MustNewConstMetric(e.m.jobsStarting, prometheus.GaugeValue, float64(jobs[pipeline]), pipeline)
 	}
-	e.m.jobsStarting.Collect(ch)
 }
 
 func (e *Exporter) collectLastSuccess(ch chan<- prometheus.Metric) {
-	e.m.lastSuccessfulJob.Reset()
-
-	for pipeline, timestamp := range e.lastSuccessfulJob {
-		e.m.lastSuccessfulJob.WithLabelValues(pipeline).Set(float64(timestamp))
+	for pipeline := range e.pipelines {
+		ch <- prometheus.MustNewConstMetric(e.m.lastSuccessfulJob, prometheus.GaugeValue, float64(e.lastSuccessfulJob[pipeline]), pipeline)
 	}
-	e.m.lastSuccessfulJob.Collect(ch)
 }
 
 func byPipeline(byJobID map[string]*pps.JobInfo) map[string]int {
