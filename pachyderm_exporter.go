@@ -25,7 +25,7 @@ func main() {
 
 	c, err := client.NewFromAddress(*pachydermAddress)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("failed to connect to pachyderm:", err)
 	}
 	defer c.Close()
 	exp := exporter.New(&exporter.PachydermClientWrapper{APIClient: c}, *pachydermTimeout)

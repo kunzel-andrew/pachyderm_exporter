@@ -26,9 +26,12 @@ const (
 )
 
 type Exporter struct {
-	pachClient        PachydermClient
-	queryTimeout      time.Duration
-	mutex             sync.Mutex
+	pachClient   PachydermClient
+	queryTimeout time.Duration
+	mutex        sync.Mutex
+	// List of pipelines on pachyderm, and their states
+	pipelines map[string]pps.PipelineState
+	// Map of jobID to job metadata
 	runningJobs       map[string]*pps.JobInfo
 	startingJobs      map[string]*pps.JobInfo
 	lastTailJobID     string
@@ -45,13 +48,12 @@ type PachydermClient interface {
 type metrics struct {
 	scrapes           prometheus.Counter
 	up                prometheus.Gauge
-	pipelines         *prometheus.GaugeVec
+	pipelines         *prometheus.Desc
 	jobsCompleted     *prometheus.CounterVec
-	jobsFailed        *prometheus.CounterVec
-	jobsRunning       *prometheus.GaugeVec
-	jobsStarting      *prometheus.GaugeVec
+	jobsRunning       *prometheus.Desc
+	jobsStarting      *prometheus.Desc
 	datums            *prometheus.CounterVec
-	lastSuccessfulJob *prometheus.GaugeVec
+	lastSuccessfulJob *prometheus.Desc
 	uploaded          *prometheus.CounterVec
 	downloaded        *prometheus.CounterVec
 	uploadTime        *prometheus.CounterVec
@@ -72,26 +74,30 @@ func New(c PachydermClient, queryTimeout time.Duration) *Exporter {
 				Name: "pachyderm_exporter_scrapes_total",
 				Help: "Total pachyderm scrapes",
 			}),
-			pipelines: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_pipeline_states",
-				Help: "State of each pipeline. Set to 1 if pipeline is in the given state.",
-			}, []string{"state", "pipeline"}),
+			pipelines: prometheus.NewDesc(
+				"pachyderm_pipeline_states",
+				"State of each pipeline. Set to 1 if pipeline is in the given state.",
+				[]string{"state", "pipeline"}, nil,
+			),
 			jobsCompleted: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "pachyderm_jobs_completed_total",
 				Help: "Total number of jobs that pachyderm has completed, by state and pipeline",
 			}, []string{"state", "pipeline"}),
-			jobsRunning: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_jobs_running",
-				Help: "Number of pachyderm jobs in the RUNNING state",
-			}, []string{"pipeline"}),
-			jobsStarting: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_jobs_starting",
-				Help: "Number of pachyderm jobs in the STARTING state",
-			}, []string{"pipeline"}),
-			lastSuccessfulJob: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Name: "pachyderm_last_successful_job",
-				Help: "When the last successful job ran, as a Unix timestamp in seconds",
-			}, []string{"pipeline"}),
+			jobsRunning: prometheus.NewDesc(
+				"pachyderm_jobs_running",
+				"Number of pachyderm jobs in the RUNNING state",
+				[]string{"pipeline"}, nil,
+			),
+			jobsStarting: prometheus.NewDesc(
+				"pachyderm_jobs_starting",
+				"Number of pachyderm jobs in the STARTING state",
+				[]string{"pipeline"}, nil,
+			),
+			lastSuccessfulJob: prometheus.NewDesc(
+				"pachyderm_last_successful_job",
+				"When the last successful job ran, as a Unix timestamp in seconds",
+				[]string{"pipeline"}, nil,
+			),
 			datums: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "pachyderm_datums_total",
 				Help: "Total number of datums that pachyderm has processed",
@@ -126,17 +132,17 @@ func New(c PachydermClient, queryTimeout time.Duration) *Exporter {
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.m.up.Describe(ch)
 	e.m.scrapes.Describe(ch)
-	e.m.pipelines.Describe(ch)
 	e.m.jobsCompleted.Describe(ch)
-	e.m.jobsRunning.Describe(ch)
-	e.m.jobsStarting.Describe(ch)
 	e.m.datums.Describe(ch)
-	e.m.lastSuccessfulJob.Describe(ch)
 	e.m.downloaded.Describe(ch)
 	e.m.uploaded.Describe(ch)
 	e.m.downloadTime.Describe(ch)
 	e.m.uploadTime.Describe(ch)
 	e.m.processTime.Describe(ch)
+	ch <- e.m.pipelines
+	ch <- e.m.jobsRunning
+	ch <- e.m.jobsStarting
+	ch <- e.m.lastSuccessfulJob
 }
 
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
@@ -152,7 +158,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 
 	e.m.up.Collect(ch)
 	e.m.scrapes.Collect(ch)
-	e.m.pipelines.Collect(ch)
 	e.m.jobsCompleted.Collect(ch)
 	e.m.datums.Collect(ch)
 	e.m.downloaded.Collect(ch)
@@ -160,6 +165,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.m.downloadTime.Collect(ch)
 	e.m.uploadTime.Collect(ch)
 	e.m.processTime.Collect(ch)
+	e.collectPipelineStates(ch)
 	e.collectRunningJobs(ch)
 	e.collectStartingJobs(ch)
 	e.collectLastSuccess(ch)
@@ -183,12 +189,11 @@ func (e *Exporter) scrapePipelines() error {
 	if err != nil {
 		return fmt.Errorf("couldn't list pipelines: %s", err.Error())
 	}
-	gauge := e.m.pipelines
-	gauge.Reset()
+	// reset and populate e.pipelines
+	e.pipelines = make(map[string]pps.PipelineState, len(pipelines))
 	for _, pipeline := range pipelines {
 		name := pipeline.Pipeline.Name
-		state := strings.ToLower(strings.TrimPrefix(pipeline.State.String(), "PIPELINE_"))
-		gauge.WithLabelValues(state, name).Set(1)
+		e.pipelines[name] = pipeline.State
 	}
 	return nil
 }
@@ -335,33 +340,40 @@ func incCounter(c prometheus.Counter, v int64) {
 	c.Add(float64(v))
 }
 
-func (e *Exporter) collectRunningJobs(ch chan<- prometheus.Metric) {
-	e.m.jobsRunning.Reset()
-
-	jobs := byPipeline(e.runningJobs)
-	for pipeline, count := range jobs {
-		e.m.jobsRunning.WithLabelValues(pipeline).Set(float64(count))
+func (e *Exporter) collectPipelineStates(ch chan<- prometheus.Metric) {
+	for pipeline, state := range e.pipelines {
+		for _, possibleState := range pps.PipelineState_name {
+			stateLabel := strings.ToLower(strings.TrimPrefix(possibleState, "PIPELINE_"))
+			// Populate a 0 or 1 for each pipeline in every state
+			if possibleState == state.String() {
+				ch <- prometheus.MustNewConstMetric(e.m.pipelines, prometheus.GaugeValue, 1, stateLabel, pipeline)
+			} else {
+				ch <- prometheus.MustNewConstMetric(e.m.pipelines, prometheus.GaugeValue, 0, stateLabel, pipeline)
+			}
+		}
 	}
-	e.m.jobsRunning.Collect(ch)
+}
+
+func (e *Exporter) collectRunningJobs(ch chan<- prometheus.Metric) {
+	jobs := byPipeline(e.runningJobs)
+
+	for pipeline := range e.pipelines {
+		ch <- prometheus.MustNewConstMetric(e.m.jobsRunning, prometheus.GaugeValue, float64(jobs[pipeline]), pipeline)
+	}
 }
 
 func (e *Exporter) collectStartingJobs(ch chan<- prometheus.Metric) {
-	e.m.jobsStarting.Reset()
-
 	jobs := byPipeline(e.startingJobs)
-	for pipeline, count := range jobs {
-		e.m.jobsStarting.WithLabelValues(pipeline).Set(float64(count))
+
+	for pipeline := range e.pipelines {
+		ch <- prometheus.MustNewConstMetric(e.m.jobsStarting, prometheus.GaugeValue, float64(jobs[pipeline]), pipeline)
 	}
-	e.m.jobsStarting.Collect(ch)
 }
 
 func (e *Exporter) collectLastSuccess(ch chan<- prometheus.Metric) {
-	e.m.lastSuccessfulJob.Reset()
-
-	for pipeline, timestamp := range e.lastSuccessfulJob {
-		e.m.lastSuccessfulJob.WithLabelValues(pipeline).Set(float64(timestamp))
+	for pipeline := range e.pipelines {
+		ch <- prometheus.MustNewConstMetric(e.m.lastSuccessfulJob, prometheus.GaugeValue, float64(e.lastSuccessfulJob[pipeline]), pipeline)
 	}
-	e.m.lastSuccessfulJob.Collect(ch)
 }
 
 func byPipeline(byJobID map[string]*pps.JobInfo) map[string]int {

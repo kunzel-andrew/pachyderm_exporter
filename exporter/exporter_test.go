@@ -111,6 +111,9 @@ func TestScrapeErrorAndRecover(t *testing.T) {
 			job("map", "2", pps.JobState_JOB_RUNNING, 10, 0),
 			job("map", "1", pps.JobState_JOB_SUCCESS, 10, t1),
 		},
+		pipelines: []*pps.PipelineInfo{
+			pipeline("map", "1", pps.PipelineState_PIPELINE_RUNNING),
+		},
 	}
 	exporter := New(client, time.Minute)
 	reg := promtest.NewTestRegistry(t)
@@ -167,6 +170,9 @@ func TestScrapeErrorReadStreamItemAndRecover(t *testing.T) {
 		jobs: []*pps.JobInfo{
 			job("map", "2", pps.JobState_JOB_RUNNING, 10, 0),
 			job("map", "1", pps.JobState_JOB_SUCCESS, 10, t1),
+		},
+		pipelines: []*pps.PipelineInfo{
+			pipeline("map", "1", pps.PipelineState_PIPELINE_RUNNING),
 		},
 	}
 	exporter := New(client, time.Minute)
