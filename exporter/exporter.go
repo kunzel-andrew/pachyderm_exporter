@@ -249,6 +249,7 @@ func (e *Exporter) scrapeJobs() error {
 		if prev, ok := e.runningJobs[jobID]; ok {
 			// Update state and datum count of a job that was previously RUNNING
 			e.trackJobDiff(prev, job)
+			e.runningJobs[jobID] = job
 			if state != pps.JobState_JOB_RUNNING {
 				delete(e.runningJobs, jobID)
 			}
