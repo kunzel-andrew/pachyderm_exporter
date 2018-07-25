@@ -231,6 +231,44 @@ func TestScrapeErrorReadStreamItemAndRecover(t *testing.T) {
 	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 23)
 }
 
+func TestJobCounts(t *testing.T) {
+	client := &fakePachyderm{
+		jobs: []*pps.JobInfo{
+			job("map", "1", pps.JobState_JOB_RUNNING, 10, t1),
+		},
+		pipelines: []*pps.PipelineInfo{
+			pipeline("map", "1", pps.PipelineState_PIPELINE_RUNNING),
+		},
+	}
+	exporter := New(client, time.Minute)
+	reg := promtest.NewTestRegistry(t)
+	reg.MustRegister(exporter)
+	snapshot, err := reg.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 10)
+
+	// More items processed, count should go up by 5
+	client.jobs = []*pps.JobInfo{
+		job("map", "1", pps.JobState_JOB_RUNNING, 15, t1),
+	}
+	snapshot, err = reg.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 15)
+
+	// No changes, count should stay the same
+	snapshot, err = reg.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 15)
+}
+
 func job(pipeline, id string, state pps.JobState, datumsProcessed int64, timeCompleted int64) *pps.JobInfo {
 	var finished *proto.Timestamp
 	if timeCompleted != 0 {
