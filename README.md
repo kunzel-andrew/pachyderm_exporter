@@ -39,6 +39,8 @@ kubectl run curl --image=radial/busyboxplus:curl -i --tty --rm --restart=Never -
 
 See [here](./exporter/exporter.go#L61) for the list of exported metrics.
 
+There's a pre-built Grafana dashboard at https://grafana.com/dashboards/7386
+
 ## Development
 
 
