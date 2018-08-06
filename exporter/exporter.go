@@ -19,6 +19,7 @@ const (
 	stateSuccess = "success"
 	stateFailure = "failure"
 	stateKilled  = "killed"
+	stateDeleted = "deleted"
 
 	datumStateProcessed = "processed"
 	datumStateFailed    = "failed"
@@ -283,6 +284,19 @@ func (e *Exporter) scrapeJobs() error {
 			}
 		}
 	}
+
+	// Any job we haven't seen has probably been deleted, clear it out
+	for jobID, job := range notSeen {
+		log.Printf("Job %s was not seen, clearing it out", jobID)
+		switch job.State {
+		case pps.JobState_JOB_RUNNING:
+			delete(e.runningJobs, jobID)
+		case pps.JobState_JOB_STARTING:
+			delete(e.startingJobs, jobID)
+		}
+		e.m.jobsCompleted.WithLabelValues(stateDeleted, job.Pipeline.Name).Inc()
+	}
+
 	return nil
 }
 
