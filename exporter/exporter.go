@@ -117,7 +117,7 @@ func New(c PachydermClient, queryTimeout time.Duration) *Exporter {
 			}, []string{"pipeline"}),
 			downloadTime: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "pachyderm_download_time_seconds_total",
-				Help: "Total amount of time spent in uploading across all runs of the pipeline",
+				Help: "Total amount of time spent in downloading across all runs of the pipeline",
 			}, []string{"pipeline"}),
 			processTime: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Name: "pachyderm_process_time_seconds_total",
