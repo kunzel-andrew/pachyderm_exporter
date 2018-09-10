@@ -210,11 +210,6 @@ func (e *Exporter) scrapeJobs() error {
 
 	reachedLastTail := false
 	tailJobID := ""
-	defer func() {
-		if tailJobID != "" {
-			e.lastTailJobID = tailJobID
-		}
-	}()
 
 	notSeen := mergeJobMap(e.startingJobs, e.runningJobs)
 
@@ -295,6 +290,11 @@ func (e *Exporter) scrapeJobs() error {
 			delete(e.startingJobs, jobID)
 		}
 		e.m.jobsCompleted.WithLabelValues(stateDeleted, job.Pipeline.Name).Inc()
+	}
+
+	// Only update tail job id if we finished without an error.
+	if tailJobID != "" {
+		e.lastTailJobID = tailJobID
 	}
 
 	return nil
