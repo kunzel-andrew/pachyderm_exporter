@@ -17,7 +17,7 @@ func main() {
 		listenAddress    = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9425").String()
 		metricsPath      = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		pachydermAddress = kingpin.Flag("pachyderm.address", "Address on which to scrape Pachyderm").String()
-		pachydermTimeout = kingpin.Flag("pachyderm.timeout", "Timeout for getting job information Pachyderm").Default("5s").Duration()
+		pachydermTimeout = kingpin.Flag("pachyderm.timeout", "Timeout for getting job information Pachyderm").Default("30s").Duration()
 	)
 
 	kingpin.HelpFlag.Short('h')
