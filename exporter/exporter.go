@@ -212,6 +212,13 @@ func (e *Exporter) scrapeJobs() error {
 	tailJobID := ""
 
 	notSeen := mergeJobMap(e.startingJobs, e.runningJobs)
+	count := 0
+	start := time.Now()
+	lookForIDs := jobIDsFromMap(notSeen)
+	defer func() {
+		log.Printf("export iterated through %v jobs, took %v, tail now at %v", count, time.Since(start), e.lastTailJobID)
+		log.Printf("looked for jobs %v, did not see jobs %v", lookForIDs, jobIDsFromMap(notSeen))
+	}()
 
 	// Loop terminates if:
 	// - We've found the previous tail and we aren't looking for any more previously STARTING/RUNNING jobs
@@ -225,6 +232,7 @@ func (e *Exporter) scrapeJobs() error {
 			}
 			break
 		}
+		count++
 
 		jobID := job.Job.ID
 		state := job.State
@@ -413,6 +421,14 @@ func mergeJobMap(a, b map[string]*pps.JobInfo) map[string]*pps.JobInfo {
 		dst[k] = v
 	}
 	return dst
+}
+
+func jobIDsFromMap(l map[string]*pps.JobInfo) []string {
+	var o []string
+	for k := range l {
+		o = append(o, k)
+	}
+	return o
 }
 
 // PachydermClientWrapper modifies the signature of APIClient.WithCtx so that it can be used in the PachydermClient
