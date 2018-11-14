@@ -254,10 +254,10 @@ func (e *Exporter) scrapeJobs() error {
 			// Update state and datum count of a job that was previously RUNNING
 			e.trackJobDiff(prev, job)
 			e.runningJobs[jobID] = job
-			if state != pps.JobState_JOB_RUNNING {
+			if state != pps.JobState_JOB_RUNNING || runningJobDone(job) {
 				delete(e.runningJobs, jobID)
 			}
-			if isCompletedState(state) {
+			if isCompletedJob(job) {
 				e.trackCompletion(job)
 			}
 		} else if _, ok := e.startingJobs[jobID]; ok {
@@ -266,7 +266,7 @@ func (e *Exporter) scrapeJobs() error {
 			if state == pps.JobState_JOB_RUNNING {
 				delete(e.startingJobs, jobID)
 				e.runningJobs[jobID] = job
-			} else if isCompletedState(state) {
+			} else if isCompletedJob(job) {
 				delete(e.startingJobs, jobID)
 				e.trackCompletion(job)
 			}
@@ -310,6 +310,14 @@ func (e *Exporter) scrapeJobs() error {
 
 func isCompletedState(state pps.JobState) bool {
 	return state == pps.JobState_JOB_SUCCESS || state == pps.JobState_JOB_FAILURE || state == pps.JobState_JOB_KILLED
+}
+
+func runningJobDone(job *pps.JobInfo) bool {
+	return job.GetFinished() != nil
+}
+
+func isCompletedJob(job *pps.JobInfo) bool {
+	return isCompletedState(job.State) || runningJobDone(job)
 }
 
 func (e *Exporter) trackCompletion(job *pps.JobInfo) {
@@ -430,6 +438,7 @@ func jobIDsFromMap(l map[string]*pps.JobInfo) []string {
 	}
 	return o
 }
+
 
 // PachydermClientWrapper modifies the signature of APIClient.WithCtx so that it can be used in the PachydermClient
 // interface.
