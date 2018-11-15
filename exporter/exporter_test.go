@@ -234,7 +234,7 @@ func TestScrapeErrorReadStreamItemAndRecover(t *testing.T) {
 func TestJobCounts(t *testing.T) {
 	client := &fakePachyderm{
 		jobs: []*pps.JobInfo{
-			job("map", "1", pps.JobState_JOB_RUNNING, 10, t1),
+			job("map", "1", pps.JobState_JOB_RUNNING, 10, 0),
 		},
 		pipelines: []*pps.PipelineInfo{
 			pipeline("map", "1", pps.PipelineState_PIPELINE_RUNNING),
@@ -252,7 +252,7 @@ func TestJobCounts(t *testing.T) {
 
 	// More items processed, count should go up by 5
 	client.jobs = []*pps.JobInfo{
-		job("map", "1", pps.JobState_JOB_RUNNING, 15, t1),
+		job("map", "1", pps.JobState_JOB_RUNNING, 15, 0),
 	}
 	snapshot, err = reg.TakeSnapshot()
 	if err != nil {
@@ -267,6 +267,41 @@ func TestJobCounts(t *testing.T) {
 	}
 
 	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 15)
+}
+
+func TestRunningJobsDone(t *testing.T) {
+	// map jobs 2 & 3 finish with no failed datums but stay in running state
+	jobWithFailedDatums := job("map", "4", pps.JobState_JOB_RUNNING, 1, t4)
+	jobWithFailedDatums.DataFailed = 5
+	client := &fakePachyderm{
+		jobs: []*pps.JobInfo{
+			job("map", "1", pps.JobState_JOB_SUCCESS, 5, t1),
+			job("map", "2", pps.JobState_JOB_RUNNING, 7, t2),
+			job("map", "3", pps.JobState_JOB_RUNNING, 13, t3),
+			jobWithFailedDatums,
+			job("map", "5", pps.JobState_JOB_RUNNING, 0, 0),
+		},
+		pipelines: []*pps.PipelineInfo{
+			pipeline("map", "1", pps.PipelineState_PIPELINE_RUNNING),
+		},
+	}
+	exporter := New(client, time.Minute)
+	reg := promtest.NewTestRegistry(t)
+	reg.MustRegister(exporter)
+	snapshot, err := reg.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot.AssertGauge("pachyderm_up", nil, 1)
+	snapshot.AssertCount("pachyderm_exporter_scrapes_total", nil, 1)
+	snapshot.AssertCount("pachyderm_jobs_completed_total", map[string]string{"state": stateSuccess, "pipeline": "map"}, 3)
+	snapshot.AssertCount("pachyderm_jobs_completed_total", map[string]string{"state": stateFailure, "pipeline": "map"}, 1)
+	snapshot.AssertGauge("pachyderm_jobs_running", map[string]string{"pipeline": "map"}, 1)
+	snapshot.AssertGauge("pachyderm_jobs_starting", map[string]string{"pipeline": "map"}, 0)
+	snapshot.AssertGauge("pachyderm_last_successful_job", map[string]string{"pipeline": "map"}, t3)
+	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateProcessed, "pipeline": "map"}, 26)
+	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateFailed, "pipeline": "map"}, 5)
 }
 
 func TestDeletedJobs(t *testing.T) {

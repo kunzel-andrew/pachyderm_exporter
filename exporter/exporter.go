@@ -235,7 +235,7 @@ func (e *Exporter) scrapeJobs() error {
 		count++
 
 		jobID := job.Job.ID
-		state := job.State
+		state := runningJobState(job)
 
 		// Save the latest job ID as the tail pointer
 		if tailJobID == "" {
@@ -254,7 +254,7 @@ func (e *Exporter) scrapeJobs() error {
 			// Update state and datum count of a job that was previously RUNNING
 			e.trackJobDiff(prev, job)
 			e.runningJobs[jobID] = job
-			if state != pps.JobState_JOB_RUNNING {
+			if isCompletedState(state) {
 				delete(e.runningJobs, jobID)
 			}
 			if isCompletedState(state) {
@@ -273,7 +273,7 @@ func (e *Exporter) scrapeJobs() error {
 		} else if !reachedLastTail {
 			// Update state and datum count for jobs that we haven't seen before
 			e.trackJobDiff(nil, job)
-			switch job.State {
+			switch runningJobState(job) {
 			case pps.JobState_JOB_SUCCESS, pps.JobState_JOB_FAILURE, pps.JobState_JOB_KILLED:
 				e.trackCompletion(job)
 			case pps.JobState_JOB_RUNNING:
@@ -291,7 +291,7 @@ func (e *Exporter) scrapeJobs() error {
 	// Any job we haven't seen has probably been deleted, clear it out
 	for jobID, job := range notSeen {
 		log.Printf("Job %s was not seen, clearing it out", jobID)
-		switch job.State {
+		switch runningJobState(job) {
 		case pps.JobState_JOB_RUNNING:
 			delete(e.runningJobs, jobID)
 		case pps.JobState_JOB_STARTING:
@@ -312,8 +312,22 @@ func isCompletedState(state pps.JobState) bool {
 	return state == pps.JobState_JOB_SUCCESS || state == pps.JobState_JOB_FAILURE || state == pps.JobState_JOB_KILLED
 }
 
+func runningJobState(job *pps.JobInfo) pps.JobState {
+	if job.State != pps.JobState_JOB_RUNNING {
+		return job.State
+	}
+	if job.State == pps.JobState_JOB_RUNNING && job.GetFinished() != nil {
+		if job.DataFailed == 0 {
+			return pps.JobState_JOB_SUCCESS
+		} else {
+			return pps.JobState_JOB_FAILURE
+		}
+	}
+	return pps.JobState_JOB_RUNNING
+}
+
 func (e *Exporter) trackCompletion(job *pps.JobInfo) {
-	state := job.State
+	state := runningJobState(job)
 	pipeline := job.Pipeline.Name
 	switch state {
 	case pps.JobState_JOB_SUCCESS:
