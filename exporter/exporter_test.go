@@ -304,7 +304,6 @@ func TestRunningJobsDone(t *testing.T) {
 	snapshot.AssertCount("pachyderm_datums_total", map[string]string{"state": datumStateFailed, "pipeline": "map"}, 5)
 }
 
-
 func TestDeletedJobs(t *testing.T) {
 	client := &fakePachyderm{
 		jobs: []*pps.JobInfo{

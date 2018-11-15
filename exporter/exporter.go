@@ -291,7 +291,7 @@ func (e *Exporter) scrapeJobs() error {
 	// Any job we haven't seen has probably been deleted, clear it out
 	for jobID, job := range notSeen {
 		log.Printf("Job %s was not seen, clearing it out", jobID)
-		switch runningJobState(job){
+		switch runningJobState(job) {
 		case pps.JobState_JOB_RUNNING:
 			delete(e.runningJobs, jobID)
 		case pps.JobState_JOB_STARTING:
@@ -444,7 +444,6 @@ func jobIDsFromMap(l map[string]*pps.JobInfo) []string {
 	}
 	return o
 }
-
 
 // PachydermClientWrapper modifies the signature of APIClient.WithCtx so that it can be used in the PachydermClient
 // interface.
